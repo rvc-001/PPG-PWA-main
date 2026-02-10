@@ -1,6 +1,6 @@
 /**
  * lib/signal-processing.ts
- * ROBUST VERSION WITH DETAILED ERROR REPORTING
+ * Updated with User Demographics, ID generation, and Mathematical Estimation
  */
 
 const FS = 30;
@@ -13,28 +13,82 @@ export interface FilterConfig {
   samplingRate: number;  // Hz
 }
 
-
-
 export interface SignalSample {
   timestamp: number;
   value: number;
 }
 
 export interface RecordingSession {
-  id: string;
+  id: string; // Now formatted as 0001, 0002...
   startTime: number;
   endTime?: number;
   samplingRate: number;
   rawSignal: SignalSample[];
   createdAt: Date;
+  
+  // Demographics
   patientName?: string;
-  patientId?: string;
+  age?: number;
+  height?: number; // cm
+  weight?: number; // kg
+  
+  // Analysis
   features?: number[];
   sbp?: number;
   dbp?: number;
+  glucose?: number;
   quality?: string;
-  prediction?: { sbp: number; dbp: number; glu: number };
 }
+
+// ============================================================================
+// ESTIMATION LOGIC (Mathematical / Heuristic)
+// ============================================================================
+
+export function performMathEstimation(
+    features: number[], 
+    age: number, 
+    height: number, 
+    weight: number
+) {
+    // Extract key PPG features (Indices based on extractFeatures return array)
+    // [0:RI, 1:AIx, 2:sys_slope, 3:dia_slope, 4:PW50, 5:PW75, 6:HR, 7:HRV, 8:AUC, ... 17:LF]
+    const RI = features[0] || 0.3;
+    const AIx = features[1] || -0.5;
+    const HR = features[6] || 75;
+    const STIFF = features[13] || 0.1;
+
+    // Calculate BMI
+    const h_m = height / 100;
+    const bmi = weight / (h_m * h_m || 1);
+
+    // ---------------------------------------------------------
+    // MATHEMATICAL ESTIMATION FORMULAS (Heuristic Approximations)
+    // ---------------------------------------------------------
+    
+    // SBP Estimation: Correlated with Age, BMI, Stiffness (1/RI), and HR
+    // Base: 110. Adjusted by demographics and vascular stiffness metrics.
+    let est_sbp = 105 + (0.5 * age) + (0.5 * bmi) + (0.2 * HR) - (20 * RI);
+    
+    // DBP Estimation: Correlated with SBP and peripheral resistance (AIx)
+    let est_dbp = 65 + (0.2 * age) + (0.3 * bmi) + (0.15 * HR) - (10 * RI) + (10 * AIx);
+
+    // Glucose Estimation:
+    // Non-invasive glucose is highly experimental. 
+    // Uses correlation between blood viscosity (Stiffness/HR) and BMI/Age.
+    let est_glu = 85 + (0.8 * bmi) + (0.2 * age) + (100 * STIFF) - (0.5 * HR);
+
+    // Clamping to realistic ranges to avoid scary numbers if signal is noisy
+    est_sbp = Math.min(Math.max(est_sbp, 90), 180);
+    est_dbp = Math.min(Math.max(est_dbp, 60), 120);
+    est_glu = Math.min(Math.max(est_glu, 70), 250);
+
+    return {
+        sbp: Math.round(est_sbp),
+        dbp: Math.round(est_dbp),
+        glucose: Math.round(est_glu)
+    };
+}
+
 
 // ============================================================================
 // PART 2: MATH HELPERS (Zero Dependency)
@@ -136,11 +190,11 @@ export function preprocessPPG(raw: number[]): number[] {
     
     let signal = filtfilt(b, a, raw);
     
-    // Safety check: if filter exploded (values > 1e6 or NaN), revert to raw
+    // Safety check
     const maxVal = _max(signal.map(Math.abs));
     if (isNaN(maxVal) || maxVal > 1e9) {
         console.warn("Filter unstable. Using raw signal.");
-        signal = [...raw]; // Fallback
+        signal = [...raw]; 
     }
 
     // 2. Gaussian Filter (sigma=2)
@@ -169,8 +223,6 @@ export function extractFeatures(ppg: number[]): number[] {
     if (peaks.length < 2) throw new Error(`Not enough peaks (${peaks.length}). Hold finger still.`);
     if (valleys.length < 1) throw new Error("No valleys found.");
 
-    // Ensure matched pairs (roughly) for slope calc
-    // We need at least 2 peaks and 1 valley in between or before
     
     const peakValues = peaks.map(i => ppg[i]);
     const peak_val = _mean(peakValues);
@@ -211,10 +263,9 @@ export function extractFeatures(ppg: number[]): number[] {
     const meanD2 = _mean(d2);
     const stdD2 = _std(d2);
     const d2_norm = d2.map(x => (x - meanD2) / (stdD2 + eps));
-    const sp = findPeaks(d2_norm, 8); // distance=8
+    const sp = findPeaks(d2_norm, 8); 
 
     let BA=0, CA=0, DA=0, EA=0, STIFF=0;
-    // If not enough d2 peaks, fill 0 (don't crash)
     if (sp.length >= 5) {
         const [ia, ib, ic, id, ie] = sp.slice(0, 5);
         const a = d2_norm[ia];
@@ -277,6 +328,7 @@ export class SignalStorage {
   async saveSession(session: RecordingSession) {
     const sessions = await this.getSessions();
     sessions.push(session);
+    // Keep last 50
     if (sessions.length > 50) sessions.shift();
     localStorage.setItem('ppg_sessions', JSON.stringify(sessions));
   }
@@ -302,9 +354,21 @@ export class SignalStorage {
     localStorage.setItem('ppg_sessions', JSON.stringify(filtered));
   }
 
-  // ADDED THIS METHOD TO FIX THE BUILD ERROR
   async clearAll() {
     localStorage.removeItem('ppg_sessions');
+  }
+
+  async generateNextId(): Promise<string> {
+    const sessions = await this.getSessions();
+    if (sessions.length === 0) return "0001";
+
+    // Extract numeric parts of IDs
+    const ids = sessions.map(s => parseInt(s.id, 10)).filter(n => !isNaN(n));
+    if (ids.length === 0) return "0001";
+    
+    const maxId = Math.max(...ids);
+    const next = maxId + 1;
+    return next.toString().padStart(4, '0');
   }
 }
 
@@ -313,30 +377,23 @@ export class SignalStorage {
 // ============================================================================
 
 function filtfilt(b: number[], a: number[], x: number[]): number[] {
-    // Basic LFILTER implementation (Direct Form I)
     const forward = lfilter(b, a, x);
-    // Reverse and filter again to cancel phase delay
     const backward = lfilter(b, a, forward.reverse());
     return backward.reverse();
 }
 
 function lfilter(b: number[], a: number[], x: number[]): number[] {
     const y = new Array(x.length).fill(0);
-    // Helper to prevent NaN propagation
     const safe = (v: number) => isNaN(v) ? 0 : v;
 
     for (let n = 0; n < x.length; n++) {
-        // FIR part
         for (let i = 0; i < b.length; i++) {
             if (n - i >= 0) y[n] += b[i] * safe(x[n - i]);
         }
-        // IIR part
         for (let j = 1; j < a.length; j++) {
             if (n - j >= 0) y[n] -= a[j] * safe(y[n - j]);
         }
         y[n] /= a[0];
-        
-        // Clamp to prevent infinity explosion
         if(Math.abs(y[n]) > 1e9) y[n] = 0;
     }
     return y;
@@ -368,7 +425,6 @@ function gaussianFilter1d(data: number[], sigma: number): number[] {
 function findPeaks(data: number[], distance: number): number[] {
     const candidates: number[] = [];
     for(let i=1; i<data.length-1; i++){
-        // Simple local maxima check
         if(data[i] > data[i-1] && data[i] > data[i+1]){
             candidates.push(i);
         }
