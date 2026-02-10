@@ -39,8 +39,11 @@ export default function ModelTab() {
   // 3. AUTO-LOAD ON MOUNT
   useEffect(() => {
     const init = async () => {
-        // Load Sessions & Calibration
-        new SignalStorage().getSessions().then(setRecordings);
+        // Load Sessions & Calibration (SORTED LATEST FIRST)
+        const recs = await new SignalStorage().getSessions();
+        const sortedRecs = recs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setRecordings(sortedRecs);
+
         const saved = localStorage.getItem('calibration_offsets');
         if (saved) setOffsets(JSON.parse(saved));
 
@@ -182,7 +185,7 @@ export default function ModelTab() {
            <label className="text-xs text-muted-foreground ml-1">Select Measurement Session</label>
            <select onChange={e=>setSelectedRecId(e.target.value)} className="w-full border p-3 rounded bg-background">
              <option value="">-- Select a Recording --</option>
-             {recordings.map(r => <option key={r.id} value={r.id}>{new Date(r.startTime).toLocaleTimeString()} ({((r.rawSignal?.length||0)/30).toFixed(1)}s)</option>)}
+             {recordings.map(r => <option key={r.id} value={r.id}>{r.id} - {new Date(r.startTime).toLocaleTimeString()} ({((r.rawSignal?.length||0)/30).toFixed(1)}s)</option>)}
            </select>
        </div>
 

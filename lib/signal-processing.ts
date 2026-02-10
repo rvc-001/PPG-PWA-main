@@ -1,6 +1,5 @@
 /**
  * lib/signal-processing.ts
- * Updated with User Demographics, ID generation, and Mathematical Estimation
  */
 
 const FS = 30;
@@ -19,7 +18,7 @@ export interface SignalSample {
 }
 
 export interface RecordingSession {
-  id: string; // Now formatted as 0001, 0002...
+  id: string; // Formatted as 000001, 000002...
   startTime: number;
   endTime?: number;
   samplingRate: number;
@@ -27,6 +26,7 @@ export interface RecordingSession {
   createdAt: Date;
   
   // Demographics
+  patientId?: string; // FIXED: Added to resolve build error
   patientName?: string;
   age?: number;
   height?: number; // cm
@@ -50,7 +50,6 @@ export function performMathEstimation(
     height: number, 
     weight: number
 ) {
-    // Extract key PPG features (Indices based on extractFeatures return array)
     // [0:RI, 1:AIx, 2:sys_slope, 3:dia_slope, 4:PW50, 5:PW75, 6:HR, 7:HRV, 8:AUC, ... 17:LF]
     const RI = features[0] || 0.3;
     const AIx = features[1] || -0.5;
@@ -61,23 +60,12 @@ export function performMathEstimation(
     const h_m = height / 100;
     const bmi = weight / (h_m * h_m || 1);
 
-    // ---------------------------------------------------------
-    // MATHEMATICAL ESTIMATION FORMULAS (Heuristic Approximations)
-    // ---------------------------------------------------------
-    
-    // SBP Estimation: Correlated with Age, BMI, Stiffness (1/RI), and HR
-    // Base: 110. Adjusted by demographics and vascular stiffness metrics.
+    // Heuristic Formulas
     let est_sbp = 105 + (0.5 * age) + (0.5 * bmi) + (0.2 * HR) - (20 * RI);
-    
-    // DBP Estimation: Correlated with SBP and peripheral resistance (AIx)
     let est_dbp = 65 + (0.2 * age) + (0.3 * bmi) + (0.15 * HR) - (10 * RI) + (10 * AIx);
-
-    // Glucose Estimation:
-    // Non-invasive glucose is highly experimental. 
-    // Uses correlation between blood viscosity (Stiffness/HR) and BMI/Age.
     let est_glu = 85 + (0.8 * bmi) + (0.2 * age) + (100 * STIFF) - (0.5 * HR);
 
-    // Clamping to realistic ranges to avoid scary numbers if signal is noisy
+    // Clamping
     est_sbp = Math.min(Math.max(est_sbp, 90), 180);
     est_dbp = Math.min(Math.max(est_dbp, 60), 120);
     est_glu = Math.min(Math.max(est_glu, 70), 250);
@@ -91,7 +79,7 @@ export function performMathEstimation(
 
 
 // ============================================================================
-// PART 2: MATH HELPERS (Zero Dependency)
+// PART 2: MATH HELPERS
 // ============================================================================
 
 const _mean = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
@@ -125,8 +113,8 @@ function trapz(y: number[]): number {
 }
 
 function getWelchLF(signal: number[], fs: number): number {
-    const nperseg = Math.min(256, signal.length); // Adapt to length
-    if (nperseg < 32) return 0; // Too short for spectral analysis
+    const nperseg = Math.min(256, signal.length); 
+    if (nperseg < 32) return 0; 
 
     const step = Math.floor(nperseg / 2);
     const nWindows = Math.floor((signal.length - nperseg) / step) + 1;
@@ -141,7 +129,6 @@ function getWelchLF(signal: number[], fs: number): number {
     for (let w = 0; w < nWindows; w++) {
         const start = w * step;
         const segment = signal.slice(start, start + nperseg);
-        // Simple DFT
         const fftSize = nperseg;
         const spectrum = new Array(Math.floor(fftSize/2) + 1).fill(0);
         
@@ -181,26 +168,24 @@ function getWelchLF(signal: number[], fs: number): number {
 export function preprocessPPG(raw: number[]): number[] {
     if (!raw || raw.length === 0) return [];
 
-    // Check for NaNs in input
     if (raw.some(isNaN)) return raw.map(v => isNaN(v) ? 0 : v);
 
-    // 1. Bandpass (Butterworth 4th order, 0.5-5.0Hz, fs=30)
+    // Bandpass (Butterworth 4th order, 0.5-5.0Hz, fs=30)
     const b = [0.032623, 0.0, -0.130493, 0.0, 0.195740, 0.0, -0.130493, 0.0, 0.032623];
     const a = [1.0, -4.8465, 10.6666, -14.1672, 12.0620, -6.6582, 2.3387, -0.4746, 0.0433];
     
     let signal = filtfilt(b, a, raw);
     
-    // Safety check
     const maxVal = _max(signal.map(Math.abs));
     if (isNaN(maxVal) || maxVal > 1e9) {
         console.warn("Filter unstable. Using raw signal.");
         signal = [...raw]; 
     }
 
-    // 2. Gaussian Filter (sigma=2)
+    // Gaussian Filter (sigma=2)
     signal = gaussianFilter1d(signal, 2);
 
-    // 3. Trim (3 seconds from start/end) ONLY if signal is long enough
+    // Trim
     const trimSamples = TRIM_SEC * FS;
     if (signal.length > 2.5 * trimSamples) {
         signal = signal.slice(trimSamples, signal.length - trimSamples);
@@ -210,19 +195,17 @@ export function preprocessPPG(raw: number[]): number[] {
 }
 
 export function extractFeatures(ppg: number[]): number[] {
-    // 1. Basic Checks
-    if (!ppg || ppg.length < 30) throw new Error(`Signal too short (${ppg?.length || 0} pts). Need > 30.`);
+    if (!ppg || ppg.length < 30) throw new Error(`Signal too short (${ppg?.length || 0} pts).`);
     
     const stdVal = _std(ppg);
-    if (stdVal < 1e-4) throw new Error(`Signal flatline (Std=${stdVal.toFixed(5)}). Is camera covered?`);
+    if (stdVal < 1e-4) throw new Error(`Signal flatline.`);
 
-    // 2. Peak Detection (Relaxed: dist=10 samples ~ 0.33s -> Max 180 BPM)
+    // Peak Detection
     const peaks = findPeaks(ppg, 10);
     const valleys = findPeaks(ppg.map(x => -x), 10);
 
-    if (peaks.length < 2) throw new Error(`Not enough peaks (${peaks.length}). Hold finger still.`);
+    if (peaks.length < 2) throw new Error(`Not enough peaks.`);
     if (valleys.length < 1) throw new Error("No valleys found.");
-
     
     const peakValues = peaks.map(i => ppg[i]);
     const peak_val = _mean(peakValues);
@@ -234,30 +217,24 @@ export function extractFeatures(ppg: number[]): number[] {
     const safePi = (idx: number) => peaks[Math.min(idx, peaks.length-1)];
     const safeVi = (idx: number) => valleys[Math.min(idx, valleys.length-1)];
 
-    // 1. RI
+    // Features
     const RI = safeV(0) / (peak_val + eps);
-    // 2. AIx
     const AIx = (_max(ppg) - _min(ppg)) / (peak_val + eps);
-    // 3. sys_slope
     const sys_num = safeP(0) - safeV(0);
     const sys_den = Math.abs(safePi(0) - safeVi(0)) + eps;
     const sys_slope = sys_num / sys_den;
-    // 4. dia_slope
     const dia_num = safeP(1) - safeV(0);
     const dia_den = Math.abs(safePi(1) - safeVi(0)) + eps;
     const dia_slope = dia_num / dia_den;
-    // 5-6. PW50, PW75
     const PW50 = ppg.filter(v => v > 0.5 * peak_val).length / FS;
     const PW75 = ppg.filter(v => v > 0.75 * peak_val).length / FS;
-    // 7-8. HR, HRV
     const HR = peaks.length * (60 / (ppg.length / FS));
     const RR_intervals = [];
     for(let i=1; i<peaks.length; i++) RR_intervals.push((peaks[i] - peaks[i-1])/FS);
     const HRV = RR_intervals.length > 0 ? _std(RR_intervals) : 0;
-    // 9. AUC
     const AUC = trapz(ppg);
 
-    // 10-14. Stiffness (SDPPG)
+    // Stiffness (SDPPG)
     const d1 = gradient(ppg);
     const d2 = gradient(d1);
     const meanD2 = _mean(d2);
@@ -270,22 +247,15 @@ export function extractFeatures(ppg: number[]): number[] {
         const [ia, ib, ic, id, ie] = sp.slice(0, 5);
         const a = d2_norm[ia];
         const b = d2_norm[ib];
-        const c = d2_norm[ic];
-        const d = d2_norm[id];
-        const e = d2_norm[ie];
-        BA = b/(a+eps); CA = c/(a+eps); DA = d/(a+eps); EA = e/(a+eps);
         STIFF = Math.abs(a - b);
     }
 
-    // 15-18. Statistical & Spectral
+    // Statistical & Spectral
     const mean_ppg = _mean(ppg);
     const std_ppg = _std(ppg);
-    
-    // Trend
     const smooth5 = gaussianFilter1d(ppg, 5);
     const trendGrad = gradient(smooth5);
     const baseline_trend = _mean(trendGrad);
-
     const LF = getWelchLF(ppg, FS);
 
     return [
@@ -360,15 +330,18 @@ export class SignalStorage {
 
   async generateNextId(): Promise<string> {
     const sessions = await this.getSessions();
-    if (sessions.length === 0) return "0001";
+    
+    // FIX: Filter out large timestamp IDs (e.g. > 1,000,000)
+    // We only want to increment the small clean IDs (000001, 000002...)
+    const ids = sessions
+        .map(s => parseInt(s.id, 10))
+        .filter(n => !isNaN(n) && n < 1000000); // Exclude timestamps
 
-    // Extract numeric parts of IDs
-    const ids = sessions.map(s => parseInt(s.id, 10)).filter(n => !isNaN(n));
-    if (ids.length === 0) return "0001";
+    if (ids.length === 0) return "000001"; // Reset to start if only timestamps exist
     
     const maxId = Math.max(...ids);
     const next = maxId + 1;
-    return next.toString().padStart(4, '0');
+    return next.toString().padStart(6, '0'); // Return 6 digits
   }
 }
 
