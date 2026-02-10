@@ -205,7 +205,7 @@ export default function RecordingTab() {
                     <div>
                         <label className="text-sm font-medium">Name</label>
                         <input type="text" className="w-full bg-background border rounded p-2" 
-                            value={userDetails.name} onChange={e => setUserDetails({...userDetails, name: e.target.value})} placeholder="John Doe"/>
+                            value={userDetails.name} onChange={e => setUserDetails({...userDetails, name: e.target.value})} placeholder="Your Name"/>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                         <div>

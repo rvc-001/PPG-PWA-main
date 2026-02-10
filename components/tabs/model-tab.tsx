@@ -50,7 +50,7 @@ export default function ModelTab() {
         // Load Model
         try {
             setLoadingStatus("loading");
-            log(`📂 Auto-loading Model: ${MODEL_PATH}...`);
+            log(`Auto-loading Model: ${MODEL_PATH}...`);
             
             // This fetches the file from the public folder automatically
             const s = await ort.InferenceSession.create(MODEL_PATH, { 
@@ -59,12 +59,12 @@ export default function ModelTab() {
             
             setSession(s);
             setLoadingStatus("success");
-            log("✅ System Ready: Model Loaded Successfully");
+            log("System Ready: Model Loaded Successfully");
         } catch (err: any) {
             console.error(err);
             setLoadingStatus("error");
-            log(`❌ Model Load Failed: ${err.message}`);
-            log("👉 Check if 'Ok_ppg_bp_glucose_final.onnx' is in the 'public' folder.");
+            log(`Model Load Failed: ${err.message}`);
+            log("Check if 'Ok_ppg_bp_glucose_final.onnx' is in the 'public' folder.");
         }
     };
 
@@ -78,11 +78,11 @@ export default function ModelTab() {
     if (!rec) return;
 
     try {
-        log("🔄 Starting Analysis...");
+        log("Starting Analysis...");
         
         // 1. Get Raw Data
         const rawValues = rec.rawSignal.map(x => x.value);
-        log(`📊 Signal Length: ${rawValues.length} samples`);
+        log(`Signal Length: ${rawValues.length} samples`);
 
         // 2. Preprocess
         const processed = preprocessPPG(rawValues);
@@ -91,10 +91,10 @@ export default function ModelTab() {
         let feats: number[];
         try {
             feats = extractFeatures(processed);
-            log("✅ Features Extracted");
+            log("Features Extracted");
         } catch (e: any) {
-            log(`❌ Feature Error: ${e.message}`);
-            log("👉 TIP: Record again with finger covering camera + flash.");
+            log(`Feature Error: ${e.message}`);
+            log("TIP: Record again with finger covering camera + flash.");
             return;
         }
         
@@ -117,10 +117,10 @@ export default function ModelTab() {
         };
 
         setResult(final);
-        log(`🎉 Done: SBP=${final.sbp.toFixed(0)}`);
+        log(`Done: SBP=${final.sbp.toFixed(0)}`);
 
     } catch (err: any) {
-        log(`❌ System Error: ${err.message}`);
+        log(`System Error: ${err.message}`);
     }
   };
 
@@ -168,15 +168,33 @@ export default function ModelTab() {
        <div className="grid grid-cols-3 gap-2">
          <div className="space-y-1">
              <label className="text-xs text-muted-foreground ml-1">Age</label>
-             <input type="number" value={age} onChange={e=>setAge(+e.target.value)} className="w-full border p-2 rounded bg-background" />
+             <input 
+                type="number" 
+                step="any"
+                value={age} 
+                onChange={e=>setAge(+e.target.value)} 
+                className="w-full border p-2 rounded bg-background [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+             />
          </div>
          <div className="space-y-1">
              <label className="text-xs text-muted-foreground ml-1">Height (cm)</label>
-             <input type="number" value={height} onChange={e=>setHeight(+e.target.value)} className="w-full border p-2 rounded bg-background" />
+             <input 
+                type="number" 
+                step="any"
+                value={height} 
+                onChange={e=>setHeight(+e.target.value)} 
+                className="w-full border p-2 rounded bg-background [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+             />
          </div>
          <div className="space-y-1">
              <label className="text-xs text-muted-foreground ml-1">Weight (kg)</label>
-             <input type="number" value={weight} onChange={e=>setWeight(+e.target.value)} className="w-full border p-2 rounded bg-background" />
+             <input 
+                type="number" 
+                step="any"
+                value={weight} 
+                onChange={e=>setWeight(+e.target.value)} 
+                className="w-full border p-2 rounded bg-background [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+             />
          </div>
        </div>
 
@@ -218,9 +236,30 @@ export default function ModelTab() {
                 <h4 className="text-sm font-bold flex gap-2 items-center mb-3"><Settings className="w-4 h-4"/> Calibration (Reference)</h4>
                 <div className="flex gap-2 items-center">
                     <div className="grid grid-cols-3 gap-2 flex-1">
-                        <input type="number" value={refSBP} onChange={e=>setRefSBP(+e.target.value)} className="w-full border p-2 rounded text-sm text-center bg-background" placeholder="SBP"/>
-                        <input type="number" value={refDBP} onChange={e=>setRefDBP(+e.target.value)} className="w-full border p-2 rounded text-sm text-center bg-background" placeholder="DBP"/>
-                        <input type="number" value={refGlu} onChange={e=>setRefGlu(+e.target.value)} className="w-full border p-2 rounded text-sm text-center bg-background" placeholder="Glu"/>
+                        <input 
+                            type="number" 
+                            step="any"
+                            value={refSBP} 
+                            onChange={e=>setRefSBP(+e.target.value)} 
+                            className="w-full border p-2 rounded text-sm text-center bg-background [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                            placeholder="SBP"
+                        />
+                        <input 
+                            type="number" 
+                            step="any"
+                            value={refDBP} 
+                            onChange={e=>setRefDBP(+e.target.value)} 
+                            className="w-full border p-2 rounded text-sm text-center bg-background [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                            placeholder="DBP"
+                        />
+                        <input 
+                            type="number" 
+                            step="any"
+                            value={refGlu} 
+                            onChange={e=>setRefGlu(+e.target.value)} 
+                            className="w-full border p-2 rounded text-sm text-center bg-background [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                            placeholder="Glu"
+                        />
                     </div>
                     <button onClick={calibrate} className="bg-slate-800 text-white p-2 rounded hover:bg-slate-700"><RefreshCw className="w-5 h-5"/></button>
                 </div>
