@@ -1,5 +1,6 @@
 /**
  * lib/signal-processing.ts
+ * Tuned for more realistic BP/Glucose estimation
  */
 
 const FS = 30;
@@ -26,7 +27,7 @@ export interface RecordingSession {
   createdAt: Date;
   
   // Demographics
-  patientId?: string; // FIXED: Added to resolve build error
+  patientId?: string;
   patientName?: string;
   age?: number;
   height?: number; // cm
@@ -51,24 +52,56 @@ export function performMathEstimation(
     weight: number
 ) {
     // [0:RI, 1:AIx, 2:sys_slope, 3:dia_slope, 4:PW50, 5:PW75, 6:HR, 7:HRV, 8:AUC, ... 17:LF]
-    const RI = features[0] || 0.3;
-    const AIx = features[1] || -0.5;
-    const HR = features[6] || 75;
-    const STIFF = features[13] || 0.1;
+    const RI = features[0] || -0.5; // Reflection Index (usually negative for AC signal)
+    const AIx = features[1] || 2.0; // Augmentation Index
+    const HR = features[6] || 72;   // Heart Rate
+    const STIFF = features[13] || 0.1; // Stiffness proxy
 
     // Calculate BMI
     const h_m = height / 100;
     const bmi = weight / (h_m * h_m || 1);
 
-    // Heuristic Formulas
-    let est_sbp = 105 + (0.5 * age) + (0.5 * bmi) + (0.2 * HR) - (20 * RI);
-    let est_dbp = 65 + (0.2 * age) + (0.3 * bmi) + (0.15 * HR) - (10 * RI) + (10 * AIx);
-    let est_glu = 85 + (0.8 * bmi) + (0.2 * age) + (100 * STIFF) - (0.5 * HR);
+    // ---------------------------------------------------------
+    // TUNED ESTIMATION FORMULAS (Conservative)
+    // ---------------------------------------------------------
+    
+    // Normalize inputs around averages to prevent "stacking" errors
+    const norm_age = Math.max(0, age - 30);      // Add pressure only if > 30
+    const norm_bmi = Math.max(0, bmi - 25);      // Add pressure only if overweight
+    const norm_hr = Math.max(0, HR - 70);        // Add pressure only if HR > 70
+    
+    // SBP Estimation
+    // Base 110. Add small increments for age, bmi, HR.
+    // RI (Reflection Index) is typically negative. A "stiffer" vessel might have a different RI profile.
+    // We use a smaller coefficient for RI to prevent it from blowing up the result.
+    let est_sbp = 110 
+                + (0.4 * norm_age) 
+                + (0.5 * norm_bmi) 
+                + (0.2 * norm_hr) 
+                - (5 * RI); // RI is negative, so this adds ~2-5 mmHg
 
-    // Clamping
-    est_sbp = Math.min(Math.max(est_sbp, 90), 180);
-    est_dbp = Math.min(Math.max(est_dbp, 60), 120);
-    est_glu = Math.min(Math.max(est_glu, 70), 250);
+    // DBP Estimation
+    // Base 70. 
+    let est_dbp = 70 
+                + (0.2 * norm_age) 
+                + (0.3 * norm_bmi) 
+                + (0.15 * norm_hr)
+                - (2 * RI);
+
+    // Glucose Estimation
+    // Correlate slightly with BMI and vascular stiffness
+    let est_glu = 90 
+                + (1.0 * norm_bmi) 
+                + (0.2 * norm_age) 
+                + (20 * STIFF);
+
+    // ---------------------------------------------------------
+    // SAFETY CLAMPING
+    // ---------------------------------------------------------
+    // Prevent unrealistic extremes even if inputs are weird
+    est_sbp = Math.min(Math.max(est_sbp, 95), 160);
+    est_dbp = Math.min(Math.max(est_dbp, 60), 100);
+    est_glu = Math.min(Math.max(est_glu, 70), 200);
 
     return {
         sbp: Math.round(est_sbp),
@@ -335,13 +368,13 @@ export class SignalStorage {
     // We only want to increment the small clean IDs (000001, 000002...)
     const ids = sessions
         .map(s => parseInt(s.id, 10))
-        .filter(n => !isNaN(n) && n < 1000000); // Exclude timestamps
+        .filter(n => !isNaN(n) && n < 1000000); 
 
-    if (ids.length === 0) return "000001"; // Reset to start if only timestamps exist
+    if (ids.length === 0) return "000001"; 
     
     const maxId = Math.max(...ids);
     const next = maxId + 1;
-    return next.toString().padStart(6, '0'); // Return 6 digits
+    return next.toString().padStart(6, '0');
   }
 }
 
