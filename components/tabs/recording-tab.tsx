@@ -2,9 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { RPPGAcquisition } from '@/lib/camera-utils'; 
-import { SignalStorage, RecordingSession, preprocessPPG, extractFeatures, performMathEstimation } from '@/lib/signal-processing';
+import { SignalStorage, RecordingSession, preprocessPPG, extractFeatures } from '@/lib/signal-processing';
 import SignalVisualizer from '@/components/visualization/signal-visualizer';
-import { Pause, Play, Save, Zap, ZapOff, Timer, User, X } from 'lucide-react';
+import { Pause, Play, Save, Zap, ZapOff, Timer, User, X, Activity } from 'lucide-react';
+import * as ort from 'onnxruntime-web';
+
+// Initialize ONNX wasm paths
+if (typeof window !== 'undefined') {
+    ort.env.wasm.wasmPaths = "/";
+    ort.env.wasm.numThreads = 1; 
+}
 
 export default function RecordingTab() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -17,24 +24,38 @@ export default function RecordingTab() {
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [statusMsg, setStatusMsg] = useState("Ready");
   
+  // -- ONNX MODEL STATE --
+  const [onnxSession, setOnnxSession] = useState<ort.InferenceSession | null>(null);
+
   // -- USER FORM STATE --
   const [showUserForm, setShowUserForm] = useState(false);
   const [userDetails, setUserDetails] = useState({
       name: '',
-      age: '',
-      height: '',
-      weight: ''
+      age: '30',
+      height: '170',
+      weight: '70'
   });
 
   // -- RESULTS STATE --
   const [showResults, setShowResults] = useState(false);
-  const [estimation, setEstimation] = useState<{sbp:number, dbp:number, glucose:number} | null>(null);
   const [pendingSession, setPendingSession] = useState<RecordingSession | null>(null);
+  const [modelResults, setModelResults] = useState<{sbp:number, dbp:number, glucose:number, hr:number, hrv:number} | null>(null);
 
   const recordedSamplesRef = useRef<{ timestamp: number; value: number }[]>([]);
   const rpPgRef = useRef<RPPGAcquisition | null>(null);
 
   useEffect(() => {
+    // 1. Remember the user details from local storage
+    const savedDetails = localStorage.getItem('ppg_user_details');
+    if (savedDetails) {
+        try { setUserDetails(JSON.parse(savedDetails)); } catch(e) {}
+    }
+
+    // 2. Pre-load the ONNX model so it's ready immediately after recording
+    ort.InferenceSession.create("/Ok_ppg_bp_glucose_final.onnx", { 
+        executionProviders: ['wasm'],
+    }).then(s => setOnnxSession(s)).catch(e => console.error("ONNX Load Error", e));
+
     initCamera();
     return () => stopCamera();
   }, []);
@@ -64,23 +85,22 @@ export default function RecordingTab() {
     rpPgRef.current?.stop();
   };
 
-  // 1. CLICK START -> OPEN FORM
   const handleStartClick = () => {
     if (!videoRef.current || videoRef.current.readyState < 2) {
         alert("Wait for camera to load...");
         return;
     }
-    // Reset inputs
-    setUserDetails({ name: '', age: '', height: '', weight: '' });
     setShowUserForm(true);
   };
 
-  // 2. FORM CONFIRM -> START RECORDING
   const startRecording = () => {
     if(!userDetails.name || !userDetails.age || !userDetails.height || !userDetails.weight) {
         alert("Please fill all details");
         return;
     }
+
+    // Save details so the user doesn't have to retype them
+    localStorage.setItem('ppg_user_details', JSON.stringify(userDetails));
 
     setShowUserForm(false);
     recordedSamplesRef.current = [];
@@ -105,9 +125,7 @@ export default function RecordingTab() {
     }, 1000 / 30); 
   };
 
-  // 3. STOP RECORDING -> PROCESS & SHOW RESULTS
   const stopAndAnalyze = async () => {
-    // Stop loop
     setIsRecording(false);
     if(recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
     setStatusMsg("Analyzing...");
@@ -119,20 +137,52 @@ export default function RecordingTab() {
     }
 
     try {
-        // Prepare Data
         const raw = recordedSamplesRef.current.map(s => s.value);
         const filtered = preprocessPPG(raw);
+        
+        // 1. Extract exactly the 18 model features
         const features = extractFeatures(filtered);
         
-        // Mathematical Estimation
-        const age = parseInt(userDetails.age) || 30;
-        const height = parseInt(userDetails.height) || 170;
-        const weight = parseInt(userDetails.weight) || 70;
+        const age = parseFloat(userDetails.age) || 30;
+        const height = parseFloat(userDetails.height) || 170;
+        const weight = parseFloat(userDetails.weight) || 70;
 
-        const results = performMathEstimation(features, age, height, weight);
-        setEstimation(results);
+        let estSbp = 0, estDbp = 0, estGlucose = 0;
 
-        // Prepare Session Object (But don't save yet)
+        // 2. Run Inference Immediately
+        if (onnxSession) {
+            const inputData = [...features, age, height, weight];
+            const tensor = new ort.Tensor('float32', Float32Array.from(inputData), [1, 21]);
+
+            const feeds: any = {};
+            feeds[onnxSession.inputNames[0]] = tensor;
+            
+            const out = await onnxSession.run(feeds);
+            const outputData = out[onnxSession.outputNames[0]].data as Float32Array; 
+            
+            // Apply saved calibration
+            const savedCalib = localStorage.getItem('calibration_offsets');
+            const offsets = savedCalib ? JSON.parse(savedCalib) : { sbp: 0, dbp: 0, glu: 0 };
+
+            estSbp = outputData[0] + offsets.sbp;
+            estDbp = outputData[1] + offsets.dbp;
+            estGlucose = outputData[2] + offsets.glu;
+        } else {
+            console.warn("ONNX Model was not loaded yet.");
+        }
+
+        const hr = Math.round(features[6]);
+        const hrv = parseFloat(features[7].toFixed(2));
+
+        setModelResults({
+            sbp: estSbp,
+            dbp: estDbp,
+            glucose: estGlucose,
+            hr: hr,
+            hrv: hrv
+        });
+
+        // 3. Prepare Session payload
         const storage = new SignalStorage();
         const newId = await storage.generateNextId();
         
@@ -148,10 +198,10 @@ export default function RecordingTab() {
             height: height,
             weight: weight,
             features: features,
-            sbp: results.sbp,
-            dbp: results.dbp,
-            glucose: results.glucose,
-            quality: 'Good' // Simplified
+            sbp: estSbp,
+            dbp: estDbp,
+            glucose: estGlucose,
+            quality: 'Good'
         };
 
         setPendingSession(session);
@@ -159,22 +209,20 @@ export default function RecordingTab() {
 
     } catch (e) {
         console.error(e);
-        alert("Analysis failed. Try again with a clearer signal.");
+        alert("Analysis failed. Try again with a clearer signal and ensure finger fully covers the lens.");
         setStatusMsg("Error");
     }
   };
 
-  // 4. SAVE
   const handleSave = async () => {
     if(pendingSession) {
         const storage = new SignalStorage();
         await storage.saveSession(pendingSession);
-        alert(`Session ${pendingSession.id} Saved!`);
+        alert(`Session Saved Successfully!`);
     }
     resetFlow();
   };
 
-  // 5. DISCARD
   const handleDiscard = () => {
     if(confirm("Discard this recording?")) {
         resetFlow();
@@ -184,6 +232,7 @@ export default function RecordingTab() {
   const resetFlow = () => {
     setShowResults(false);
     setPendingSession(null);
+    setModelResults(null);
     setVisRaw([]);
     setRecordingTime(0);
     setStatusMsg("Ready");
@@ -232,49 +281,66 @@ export default function RecordingTab() {
         </div>
       )}
 
-      {/* --- MODAL: RESULTS --- */}
-      {showResults && estimation && (
+      {/* --- MODAL: RESULTS & INFERENCE --- */}
+      {showResults && modelResults && (
         <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
             <div className="bg-card w-full max-w-sm rounded-xl border shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10">
                 <div className="bg-primary/10 p-4 text-center border-b">
-                    <h2 className="text-2xl font-bold text-primary">Estimation Results</h2>
-                    <p className="text-xs text-muted-foreground">Session ID: {pendingSession?.id}</p>
+                    <h2 className="text-xl font-bold text-primary flex justify-center items-center gap-2">
+                        <Activity className="w-5 h-5" /> Vitals & Analysis
+                    </h2>
                 </div>
+
                 <div className="p-6 space-y-6">
-                    <div className="grid grid-cols-3 gap-4 text-center">
+                    {/* HR & HRV (Calculated from features) */}
+                    <div className="grid grid-cols-2 gap-4 text-center border-b pb-4 border-muted">
                         <div className="space-y-1">
-                            <p className="text-xs text-muted-foreground uppercase">Glucose</p>
-                            <p className="text-2xl font-mono font-bold">{estimation.glucose}</p>
-                            <p className="text-[10px] text-muted-foreground">mg/dL</p>
+                            <p className="text-xs text-muted-foreground uppercase">Heart Rate</p>
+                            <p className="text-3xl font-mono font-bold">{modelResults.hr}</p>
+                            <p className="text-[10px] text-muted-foreground">BPM</p>
                         </div>
                         <div className="space-y-1">
+                            <p className="text-xs text-muted-foreground uppercase">HRV</p>
+                            <p className="text-3xl font-mono font-bold">{modelResults.hrv}</p>
+                            <p className="text-[10px] text-muted-foreground">ms (SDNN)</p>
+                        </div>
+                    </div>
+
+                    {/* SBP & DBP (Predicted by Model) */}
+                    <div className="grid grid-cols-2 gap-4 text-center border-b pb-4 border-muted">
+                        <div className="space-y-1">
                             <p className="text-xs text-muted-foreground uppercase">Systolic</p>
-                            <p className="text-2xl font-mono font-bold">{estimation.sbp}</p>
+                            <p className="text-3xl font-mono font-bold text-blue-600 dark:text-blue-400">{modelResults.sbp.toFixed(0)}</p>
                             <p className="text-xs text-muted-foreground">mmHg</p>
                         </div>
                         <div className="space-y-1">
                             <p className="text-xs text-muted-foreground uppercase">Diastolic</p>
-                            <p className="text-2xl font-mono font-bold">{estimation.dbp}</p>
+                            <p className="text-3xl font-mono font-bold text-green-600 dark:text-green-400">{modelResults.dbp.toFixed(0)}</p>
                             <p className="text-xs text-muted-foreground">mmHg</p>
                         </div>
                     </div>
                     
-                    <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded text-xs text-yellow-600 dark:text-yellow-400">
-                        ⚠️ These are mathematical estimations based on PPG waveforms. NOT a medical diagnosis.
+                    {/* Glucose (Predicted by Model) */}
+                    <div className="text-center">
+                        <div className="space-y-1">
+                            <p className="text-xs text-muted-foreground uppercase">Glucose</p>
+                            <p className="text-3xl font-mono font-bold text-orange-600 dark:text-orange-400">{modelResults.glucose.toFixed(1)}</p>
+                            <p className="text-[10px] text-muted-foreground">mg/dL</p>
+                        </div>
                     </div>
                 </div>
+
                 <div className="grid grid-cols-2 gap-1 p-2 bg-muted/50">
                     <button onClick={handleDiscard} className="py-3 rounded bg-background border shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors font-medium">
                         Discard
                     </button>
-                    <button onClick={handleSave} className="py-3 rounded bg-green-600 text-white shadow-sm hover:bg-green-700 transition-colors font-bold flex justify-center items-center gap-2">
-                        <Save className="w-4 h-4"/> Save
+                    <button onClick={handleSave} className="py-3 rounded bg-blue-600 text-white shadow-sm hover:bg-blue-700 transition-colors font-bold flex justify-center items-center gap-2">
+                        <Save className="w-4 h-4"/> Save Session
                     </button>
                 </div>
             </div>
         </div>
       )}
-
 
       {/* Video Preview */}
       <div className="relative h-48 bg-black rounded-lg overflow-hidden shadow-md">
