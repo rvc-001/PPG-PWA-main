@@ -11,7 +11,10 @@ import {
   Github, 
   Database, 
   AlertTriangle,
-  CheckCircle2
+  CheckCircle2,
+  Linkedin,
+  Mail,
+  User
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { SignalStorage } from '@/lib/signal-processing';
@@ -179,8 +182,40 @@ export default function SettingsTab() {
             <p className="text-xs text-muted-foreground leading-relaxed">
               A progressive web application for real-time PPG signal acquisition and client-side ONNX inference. Designed for privacy-first, offline-capable medical research.
             </p>
+          </div>
+        </section>
 
-            <div className="grid grid-cols-2 gap-2 pt-2">
+        {/* About Developer Section */}
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">About the Developer</h2>
+          <div className="bg-card border border-border rounded-lg p-4 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-primary/10 p-3 rounded-full">
+                <User className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">Developed By</p>
+                <h3 className="font-bold text-base">Rajvardhan Chhugani</h3>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-1 pt-2 border-t border-border">
+              <a
+                href="https://www.linkedin.com/in/rajvardhan-chhugani-510276297/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-3 rounded-md hover:bg-muted transition-colors text-sm text-muted-foreground hover:text-foreground"
+              >
+                <Linkedin className="w-5 h-5 text-[#0A66C2]" />
+                <span className="font-medium">LinkedIn Profile</span>
+              </a>
+              <a
+                href="mailto:chhuganirajvardhan@gmail.com"
+                className="flex items-center gap-3 p-3 rounded-md hover:bg-muted transition-colors text-sm text-muted-foreground hover:text-foreground"
+              >
+                <Mail className="w-5 h-5 text-red-500" />
+                <span className="font-medium">chhuganirajvardhan@gmail.com</span>
+              </a>
             </div>
           </div>
         </section>

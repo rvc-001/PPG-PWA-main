@@ -1,7 +1,8 @@
-cl/** @type {import('next').NextConfig} */
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  turbopack: {},
+  
+  // Removed turbopack: {} to prevent conflicts with WASM loading
 
   webpack: (config) => {
     config.resolve.alias = {
