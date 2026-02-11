@@ -8,7 +8,6 @@ import {
   Sun, 
   Monitor, 
   Info, 
-  Github, 
   Database, 
   AlertTriangle,
   CheckCircle2,
@@ -72,7 +71,7 @@ export default function SettingsTab() {
   if (!mounted) return null;
 
   return (
-    <div className="flex flex-col h-screen max-h-[80vh] bg-background">
+    <div className="w-full flex flex-col bg-background min-h-screen pb-24">
       {/* Header */}
       <div className="p-4 border-b border-border space-y-1">
         <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -83,7 +82,7 @@ export default function SettingsTab() {
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div className="p-4 space-y-6">
         
         {/* Theme Section */}
         <section className="space-y-3">
